@@ -21,7 +21,7 @@ set -x
 cat $0
 export MASTER_PORT=25678
 export MASTER_ADDR=$(hostname)
-export WANDB_API_KEY=$WANDB_KEY
+#export WANDB_API_KEY=$WANDB_KEY
 export NCCL_DEBUG=INFO
 
 # === Run main script ===

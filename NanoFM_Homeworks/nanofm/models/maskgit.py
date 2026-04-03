@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import math
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import repeat
+from einops import repeat, rearrange
 
 from nanofm.modeling.transformer_layers import TransformerTrunk, LayerNorm
 from nanofm.utils.sampling import sample_tokens
@@ -59,14 +59,14 @@ class MaskGIT(nn.Module):
         self.seq_read_key = seq_read_key
         self.init_std = init_std
 
-        self.input_embedding = ??? # TODO: Define the input embedding layer
-        self.positional_embedding = ??? # TODO: Define the learnable positional embedding
-        self.mask_token = ??? # TODO: Define the learnable mask token
+        self.input_embedding = nn.Embedding(vocab_size, dim)  # TODO: Define the input embedding layer
+        self.positional_embedding = nn.Parameter(torch.randn(seq_len, dim)) # TODO: Define the learnable positional embedding
+        self.mask_token = nn.Parameter(torch.randn(dim)) # TODO: Define the learnable mask token
         
-        self.trunk = ??? # TODO: Define the transformer trunk
+        self.trunk = TransformerTrunk(dim, depth, head_dim, mlp_ratio, use_bias) # TODO: Define the transformer trunk
 
-        self.out_norm = ??? # TODO: Define the output layer normalization. Use the LayerNorm class defined in modeling/transformer_layers.py
-        self.to_logits = ??? # TODO: Define the output projection layer
+        self.out_norm = LayerNorm(dim, use_bias) # TODO: Define the output layer normalization. Use the LayerNorm class defined in modeling/transformer_layers.py
+        self.to_logits = nn.Linear(dim, vocab_size, bias=False) # TODO: Define the output projection layer
 
         self.initialize_weights() # Weight initialization
 
@@ -120,24 +120,25 @@ class MaskGIT(nn.Module):
         B, L = x.size() # batch size and sequence length
 
         # TODO: Embed the input tokens using the input embedding layer. Shape: [B, L, D]
-        ???
+        x = self.input_embedding(x)
 
         # TODO: Replace embeddings for masked tokens with the learned self.mask_token, wherever mask is True.
         # The mask token (D) is broadcast to all masked positions (B, L)
-        ???
+        x[mask] = self.mask_token
 
         # TODO: Add the positional embeddings to the tokens
-        ???
+        x = x + self.positional_embedding[:L]
 
         # TODO: Forward pass through Transformer trunk
         # Hint: No causal mask is needed here, since we are using full self-attention.
-        ???
+        X = self.trunk(x)
 
         # TODO: Pass to the output normalization and output projection layer to compute the logits
-        ???
+        X = self.out_norm(X)
+        X = self.to_logits(X)
 
         # TODO: Return the logits
-        return ???
+        return X
 
     def generate_random_mask(self, seq: torch.Tensor) -> torch.BoolTensor:
         """
@@ -160,7 +161,18 @@ class MaskGIT(nn.Module):
         # Note: How can you avoid using a for loop here, and instead use
         # vectorized operations?
         # Hint: Don't forget to create the mask on the same device as seq.
-        ???
+        
+        num_masked_tokens = torch.randint(1, L + 1, (B, 1)).to(self.device) # random number of tokens we want to mask between 1 and L
+
+        rand_scores = torch.rand(B, L).to(self.device) # each token has now a random score
+
+        ranks = rand_scores.argsort(dim=1).argsort(dim=1) # we sort the tokens based on their random score
+
+        random_mask = ranks < num_masked_tokens # if a token's rank is less than the number of tokens we want to mask, make it True
+
+        return random_mask
+        
+        
 
     def compute_ce_loss(self, logits: torch.Tensor, target_seq: torch.LongTensor, ignore_index: int = -100) -> torch.Tensor:
         """
@@ -175,7 +187,13 @@ class MaskGIT(nn.Module):
         """
         # TODO: Compute and return the cross-entropy loss
         # Hint: Remember to ignore the ignore_index in the loss calculation
-        ???
+        
+        B, L, V = logits.shape
+        logits = rearrange(logits, 'b l v -> (b l) v')
+        target_seq = rearrange(target_seq, 'b l -> (b l)')
+        
+        loss = F.cross_entropy(logits, target_seq, ignore_index=ignore_index)
+        return loss        
 
     def forward(self, data_dict: Dict[str, Any]) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
@@ -233,7 +251,10 @@ class MaskGIT(nn.Module):
         # The `schedule` should be a list of integers of length `num_steps`, where each integer
         # represents the number of tokens to unmask at that step. The sum of the integers in
         # `schedule` should equal `total_tokens`.
-        ???
+        constant = total_tokens // num_steps
+        remainder = total_tokens - (constant * num_steps)
+        schedule = [constant for i in range(num_steps)]
+        schedule[-1] += remainder
 
         assert len(schedule) == num_steps, "Schedule length should match the number of steps."
         assert sum(schedule) == total_tokens, "Total number of tokens to unmask should match the sum of the schedule."
@@ -286,39 +307,39 @@ class MaskGIT(nn.Module):
 
         for step, k in enumerate(schedule):
             # TODO: Forward pass through the model to get the logits. Shape: [1, L, vocab_size]
-            logits = ???
+            logits = self.forward_model(seq, mask)
             
             # TODO: Get the indices of masked tokens. Shape: [M,] (M = number of masked tokens)
-            masked_indices = ???
+            masked_indices = mask[0].nonzero(as_tuple=True)[0]
 
             # TODO: Get the logits for the `masked_indices` positions. Shape: [M, vocab_size]
-            masked_logits = ???
+            masked_logits = logits[0, masked_indices, :]
             
             # TODO: Compute confidence scores from `masked_logits`. Shape: [M,]
             # Hint: As a proxy for confidence, we use the maximum logit value for each masked position.
-            confidence = ???
+            confidence = masked_logits.max(dim=-1).values
             
             # TODO: Based on the number of tokens `k` to unmask at this step in the schedule,
             # select the top-k masked positions based on confidence. Shape: [k,]
             # Hint: First, get the top-k indices of the confidence scores, and then use these indices
             # to select the corresponding masked positions.
-            ???
-            selected_positions = ???
+            _, top_masked = torch.topk(confidence, k)
+            selected_positions = masked_indices[top_masked]
             
             # TODO: Get the logits for the `selected_positions`. Shape: [k, vocab_size]
-            selected_logits = ???
+            selected_logits = logits[0, selected_positions]
             
             # TODO: Sample new tokens for the selected_positions
             # Hint: Use the sample_tokens function from utils/sampling.py
             # Make sure to pass the `temp`, `top_k` and `top_p` arguments
-            samples, _ = ???
+            samples, _ = sample_tokens(selected_logits, temperature=temp, top_k=top_k, top_p=top_p)
             
             # TODO: Update the sequence and mask. 
             # Replace the selected positions in `seq` with the sampled tokens
             # and set the corresponding positions in `mask` to False (indicating that
             # these positions are no longer masked).
-            ???
-            ???
+            seq[0, selected_positions] = samples
+            mask[0, selected_positions] = False
 
             if return_history:
                 seq_history.append(seq.clone().cpu())

@@ -12,3 +12,22 @@ nano4M_sol/data/
 .DS_Store
 __pycache__
 .ipynb_checkpoints
+
+# Conda environments and installations
+NanoFM_Homeworks/ENTER/
+*.zip
+*.tar.gz
+
+*.json
+*.tar
+*.npy
+*.png
+*.safetensors
+*.pth
+*.sh
+
+NanoFM_Homeworks/clevr/
+NanoFM_Homeworks/data/
+NanoFM_Homeworks/wandb/
+NanoFM_Homeworks/submit_job_multi_node_scitas.sh
+NanoFM_Homeworks/Miniconda3-latest-Linux-x86_64.sh
