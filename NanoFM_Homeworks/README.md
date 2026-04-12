@@ -109,7 +109,7 @@ You can run the training job in one of two ways:
 Start an interactive session on a compute node (eg, 2 GPUs case):
 
 ```bash
-srun -t 120 -A cs-503 --qos=cs-503 --gres=gpu:2 --mem=16G --pty bash
+srun -t 120 -A cs-503 --qos=cs-503 --gres=gpu:1 --mem=16G --pty bash
 ```
 Then, on the compute node:
 
